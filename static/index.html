@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RankMatch — MHT-CET Admission Counsellor</title>
+    <meta name="description" content="AI-powered MHT-CET PCM admission counsellor. Get instant answers about cutoffs, admission process, counselling rounds, and document verification.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="chat-header" id="chat-header">
+            <div class="header-left">
+                <div class="logo-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                        <path d="M2 17l10 5 10-5"/>
+                        <path d="M2 12l10 5 10-5"/>
+                    </svg>
+                </div>
+                <div class="header-text">
+                    <h1>RankMatch</h1>
+                    <span class="header-subtitle">MHT-CET Admission Counsellor</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="status-badge" id="status-badge">
+                    <span class="status-dot"></span>
+                    <span>Online</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Chat Messages Area -->
+        <main class="chat-messages" id="chat-messages">
+            <!-- Welcome Message -->
+            <div class="welcome-container" id="welcome-container">
+                <div class="welcome-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                    </svg>
+                </div>
+                <h2>Welcome to RankMatch</h2>
+                <p>I'm your AI counsellor for MHT-CET PCM admissions. Ask me about cutoffs, admission process, counselling rounds, document verification, and more.</p>
+                <p class="welcome-note">All my answers are sourced from official CET Cell documents.</p>
+                <div class="suggestions-grid" id="suggestions-grid">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </main>
+
+        <!-- Input Area -->
+        <footer class="chat-input-area" id="chat-input-area">
+            <div class="input-wrapper">
+                <div class="autocomplete-container" id="autocomplete-container">
+                    <ul class="autocomplete-list" id="autocomplete-list"></ul>
+                </div>
+                <textarea
+                    id="chat-input"
+                    placeholder="Ask about cutoffs, admissions, counselling..."
+                    rows="1"
+                    aria-label="Type your message"
+                ></textarea>
+                <button id="send-btn" class="send-button" aria-label="Send message" disabled>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"/>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="input-footer">
+                <span>Powered by CET Cell data • <a href="https://cetcell.mahacet.org" target="_blank" rel="noopener">cetcell.mahacet.org</a></span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

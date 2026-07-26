@@ -14,8 +14,8 @@ load_dotenv()
 # ============================================================
 # ⭐ CHANGE THESE TWO LINES TO SWITCH LLM PROVIDERS
 # ============================================================
-LLM_PROVIDER = "openai"                # "gemini" | "openai" | "groq" | "ollama"
-LLM_MODEL = "gpt-4o-mini"    # Model name for the chosen provider
+LLM_PROVIDER = "gemini"                # "gemini" | "openai" | "groq" | "ollama"
+LLM_MODEL = "gemini-3.5-flash"    # Model name for the chosen provider
 # ============================================================
 
 
@@ -53,19 +53,15 @@ def generate(system_prompt: str, context: str, query: str, history: list[dict] =
 # ============================================================
 
 def _generate_gemini(system_prompt: str, context: str, query: str, history: list[dict]) -> str:
-    """Google Gemini API implementation."""
-    import google.generativeai as genai
+    """Google Gemini API implementation (using google-genai SDK)."""
+    from google import genai
+    from google.genai import types
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY not found in .env file. Please add it.")
 
-    genai.configure(api_key=api_key)
-
-    model = genai.GenerativeModel(
-        model_name=LLM_MODEL,
-        system_instruction=system_prompt,
-    )
+    client = genai.Client(api_key=api_key)
 
     # Build the conversation contents
     contents = []
@@ -73,7 +69,7 @@ def _generate_gemini(system_prompt: str, context: str, query: str, history: list
     # Add conversation history
     for msg in history:
         role = "user" if msg["role"] == "user" else "model"
-        contents.append({"role": role, "parts": [msg["content"]]})
+        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
 
     # Add the current query with the retrieved context
     user_message = f"""RETRIEVED CONTEXT:
@@ -84,11 +80,13 @@ def _generate_gemini(system_prompt: str, context: str, query: str, history: list
 STUDENT'S QUESTION:
 {query}"""
 
-    contents.append({"role": "user", "parts": [user_message]})
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_message)]))
 
-    response = model.generate_content(
+    response = client.models.generate_content(
+        model=LLM_MODEL,
         contents=contents,
-        generation_config=genai.types.GenerationConfig(
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
             temperature=0.3,      # Low temperature for factual accuracy
             max_output_tokens=1500,
         ),

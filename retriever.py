@@ -1,29 +1,22 @@
 """
-Hybrid Retrieval Engine — Combines vector search with exact JSON lookup.
+Lightweight BM25 + Exact JSON Retrieval Engine.
 
-Intent classification is keyword-based (zero cost, zero latency).
-Cutoff numbers are always fetched from the raw JSON for exactness.
+Replaces heavy PyTorch and SentenceTransformers with fast Okapi BM25 and exact JSON lookup.
+Memory usage: ~40 MB (fits easily on free tier with 470MB headroom).
 """
 
 import os
-os.environ["TRANSFORMERS_NO_TF"] = "1"
-os.environ["USE_TORCH"] = "1"
-
 import json
+import math
+import re
 import difflib
-
-import chromadb
-import torch
-torch.set_num_threads(1)
-from sentence_transformers import SentenceTransformer
+from collections import Counter
 
 from config import (
-    CHROMA_PATH,
-    COLLEGE_COLLECTION,
     COLLEGES_JSON,
     COLLEGE_NAMES_JSON,
-    EMBEDDING_MODEL,
-    PDF_COLLECTION,
+    PDF_CHUNKS_JSON,
+    COLLEGE_CHUNKS_JSON,
     SOURCES_JSON,
     TOP_K_CUTOFF,
     TOP_K_MIXED,
@@ -31,11 +24,49 @@ from config import (
     get_category_name,
 )
 
-# ---- Lazy-loaded globals (initialized on first call) ----
-_embedder = None
-_chroma_client = None
-_pdf_collection = None
-_college_collection = None
+# ---- BM25 Search Engine ----
+class SimpleBM25:
+    """Fast, pure-Python Okapi BM25 search engine with zero external dependencies."""
+
+    def __init__(self, corpus: list[dict], k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.corpus = corpus
+        self.doc_len = [len(re.findall(r"\w+", d["text"].lower())) for d in corpus]
+        self.avg_len = sum(self.doc_len) / max(len(corpus), 1)
+        self.df = Counter()
+        for d in corpus:
+            words = set(re.findall(r"\w+", d["text"].lower()))
+            for w in words:
+                self.df[w] += 1
+        self.idf = {
+            w: math.log(1 + (len(corpus) - count + 0.5) / (count + 0.5))
+            for w, count in self.df.items()
+        }
+
+    def search(self, query: str, top_k: int = 3) -> list[dict]:
+        q_tokens = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
+        if not q_tokens:
+            return []
+        scores = []
+        for i, d in enumerate(self.corpus):
+            words = Counter(re.findall(r"\w+", d["text"].lower()))
+            score = 0.0
+            for q in q_tokens:
+                if q in words:
+                    tf = words[q]
+                    idf = self.idf.get(q, 0.0)
+                    score += idf * (tf * (self.k1 + 1)) / (
+                        tf + self.k1 * (1 - self.b + self.b * (self.doc_len[i] / self.avg_len))
+                    )
+            scores.append((score, d))
+        scores.sort(key=lambda x: x[0], reverse=True)
+        return [d for s, d in scores[:top_k] if s > 0]
+
+
+# ---- Lazy-loaded globals ----
+_pdf_bm25 = None
+_college_bm25 = None
 _colleges_data = None
 _college_names = None
 _sources_data = None
@@ -51,17 +82,19 @@ def _get_colleges_data() -> dict:
 
 
 def _init():
-    """Lazy-initialize the embedding model, ChromaDB, and college data."""
-    global _embedder, _chroma_client, _pdf_collection, _college_collection
-    global _college_names, _sources_data
+    """Lazy-initialize BM25 indices and metadata."""
+    global _pdf_bm25, _college_bm25, _college_names, _sources_data
 
-    if _embedder is not None:
+    if _pdf_bm25 is not None:
         return
 
-    _embedder = SentenceTransformer(EMBEDDING_MODEL)
-    _chroma_client = chromadb.PersistentClient(path=str(CHROMA_PATH))
-    _pdf_collection = _chroma_client.get_collection(PDF_COLLECTION)
-    _college_collection = _chroma_client.get_collection(COLLEGE_COLLECTION)
+    with open(PDF_CHUNKS_JSON, "r", encoding="utf-8") as f:
+        pdf_chunks = json.load(f)
+    _pdf_bm25 = SimpleBM25(pdf_chunks)
+
+    with open(COLLEGE_CHUNKS_JSON, "r", encoding="utf-8") as f:
+        college_chunks = json.load(f)
+    _college_bm25 = SimpleBM25(college_chunks)
 
     if COLLEGE_NAMES_JSON.exists():
         with open(COLLEGE_NAMES_JSON, "r", encoding="utf-8") as f:
@@ -75,12 +108,9 @@ def _init():
     except (FileNotFoundError, json.JSONDecodeError):
         _sources_data = {}
 
-    import gc
-    gc.collect()
-
 
 # ============================================================
-# Intent Classification (keyword-based, no LLM cost)
+# Intent Classification (keyword-based, zero cost)
 # ============================================================
 
 CUTOFF_KEYWORDS = {
@@ -111,18 +141,13 @@ COLLEGE_KEYWORDS = {
 
 
 def classify_intent(query: str) -> str:
-    """
-    Classify user intent based on keyword matching.
-    Returns: 'cutoff', 'process', 'college_info', or 'mixed'
-    """
+    """Classify user intent based on keyword matching."""
     query_lower = query.lower()
-    words = set(query_lower.split())
 
     cutoff_score = sum(1 for kw in CUTOFF_KEYWORDS if kw in query_lower)
     process_score = sum(1 for kw in PROCESS_KEYWORDS if kw in query_lower)
     college_score = sum(1 for kw in COLLEGE_KEYWORDS if kw in query_lower)
 
-    # Cutoff queries often mention college + cutoff keywords
     if cutoff_score >= 1 and (college_score >= 1 or cutoff_score >= 2):
         return "cutoff"
     if cutoff_score >= 2:
@@ -139,7 +164,6 @@ def classify_intent(query: str) -> str:
 # Fuzzy College Name Matching
 # ============================================================
 
-# Common abbreviations → full names
 COLLEGE_ALIASES = {
     "coep": "College of Engineering, Pune",
     "vjti": "Veermata Jijabai Technological Institute",
@@ -155,17 +179,12 @@ COLLEGE_ALIASES = {
 
 
 def find_matching_colleges(query: str, top_n: int = 3) -> list[str]:
-    """
-    Find college names matching the query using fuzzy matching.
-    Handles abbreviations and partial names.
-    """
+    """Find college names matching the query using fuzzy matching."""
     _init()
     query_lower = query.lower()
 
-    # Check abbreviation aliases first
     for alias, full_name in COLLEGE_ALIASES.items():
         if alias in query_lower:
-            # Find the actual key in colleges_data that contains this name
             matches = [
                 name for name in _college_names
                 if full_name.lower() in name.lower()
@@ -173,13 +192,10 @@ def find_matching_colleges(query: str, top_n: int = 3) -> list[str]:
             if matches:
                 return matches[:top_n]
 
-    # Extract potential college name parts from the query
-    # Try fuzzy matching against all college names
     matches = difflib.get_close_matches(
         query_lower, [n.lower() for n in _college_names], n=top_n, cutoff=0.3
     )
 
-    # Map back to original case names
     result = []
     for match in matches:
         for name in _college_names:
@@ -187,7 +203,6 @@ def find_matching_colleges(query: str, top_n: int = 3) -> list[str]:
                 result.append(name)
                 break
 
-    # Also try substring matching if fuzzy match didn't work well
     if len(result) < top_n:
         query_words = [w for w in query_lower.split() if len(w) > 3]
         for name in _college_names:
@@ -203,10 +218,7 @@ def find_matching_colleges(query: str, top_n: int = 3) -> list[str]:
 
 
 def get_exact_cutoffs(college_name: str, branch_name: str = None) -> dict | None:
-    """
-    Get exact cutoff data from the JSON for a specific college (and optionally branch).
-    Returns the raw data structure from colleges.json.
-    """
+    """Get exact cutoff data from colleges.json for a specific college and branch."""
     _init()
     colleges_data = _get_colleges_data()
 
@@ -218,7 +230,6 @@ def get_exact_cutoffs(college_name: str, branch_name: str = None) -> dict | None
     if branch_name is None:
         return college
 
-    # Fuzzy match the branch name
     branch_names = list(college.get("offerings", {}).keys())
     branch_matches = difflib.get_close_matches(
         branch_name.lower(),
@@ -291,15 +302,8 @@ def get_source_info(source_file: str) -> dict:
 
 def retrieve(query: str) -> dict:
     """
-    Main retrieval function. Classifies intent, searches the appropriate
-    vector store collection(s), and optionally does exact JSON lookup.
-
-    Returns:
-        {
-            "context": str,          # Combined text context for the LLM
-            "sources": list[dict],   # [{title, url}] for citation
-            "intent": str,           # Classified intent
-        }
+    Main retrieval function.
+    Combines BM25 text search with exact JSON lookup.
     """
     _init()
 
@@ -308,38 +312,22 @@ def retrieve(query: str) -> dict:
     sources = []
     seen_sources = set()
 
-    # Embed the query
-    with torch.inference_mode():
-        query_embedding = _embedder.encode(query, show_progress_bar=False).tolist()
-
     if intent == "cutoff" or intent == "college_info":
-        # --- Search college_cutoffs collection ---
-        results = _college_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=TOP_K_CUTOFF,
-        )
+        docs = _college_bm25.search(query, top_k=TOP_K_CUTOFF)
+        for d in docs:
+            context_parts.append(d["text"])
+            src_file = d.get("metadata", {}).get("source_file", "")
+            if src_file and src_file not in seen_sources:
+                sources.append(get_source_info(src_file))
+                seen_sources.add(src_file)
 
-        if results["documents"] and results["documents"][0]:
-            for i, doc in enumerate(results["documents"][0]):
-                context_parts.append(doc)
-
-                # Get source info
-                meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                src_file = meta.get("source_file", "")
-                if src_file and src_file not in seen_sources:
-                    sources.append(get_source_info(src_file))
-                    seen_sources.add(src_file)
-
-        # --- Also do exact JSON lookup for cutoff queries ---
         if intent == "cutoff":
             matching_colleges = find_matching_colleges(query)
             for college_name in matching_colleges:
-                # Try to extract branch name from the query
                 branch_query = query.lower()
                 college_obj = _get_colleges_data().get(college_name, {})
                 offerings = college_obj.get("offerings", {})
 
-                # Try to match a branch
                 branch_found = False
                 for bname in offerings:
                     if any(word in branch_query for word in bname.lower().split() if len(word) > 3):
@@ -351,7 +339,6 @@ def retrieve(query: str) -> dict:
                             break
 
                 if not branch_found and offerings:
-                    # If no specific branch matched, show all branches available
                     branch_list = ", ".join(offerings.keys())
                     context_parts.append(
                         f"College: {college_name} offers the following branches: {branch_list}. "
@@ -359,49 +346,25 @@ def retrieve(query: str) -> dict:
                     )
 
     elif intent == "process":
-        # --- Search pdf_knowledge collection ---
-        results = _pdf_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=TOP_K_RESULTS,
-        )
-
-        if results["documents"] and results["documents"][0]:
-            for i, doc in enumerate(results["documents"][0]):
-                context_parts.append(doc)
-
-                meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                src_file = meta.get("source_file", "")
-                if src_file and src_file not in seen_sources:
-                    sources.append(get_source_info(src_file))
-                    seen_sources.add(src_file)
+        docs = _pdf_bm25.search(query, top_k=TOP_K_RESULTS)
+        for d in docs:
+            context_parts.append(d["text"])
+            src_file = d.get("metadata", {}).get("source_file", "")
+            if src_file and src_file not in seen_sources:
+                sources.append(get_source_info(src_file))
+                seen_sources.add(src_file)
 
     else:
-        # --- Mixed: search both collections ---
-        pdf_results = _pdf_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=TOP_K_MIXED,
-        )
-        college_results = _college_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=TOP_K_MIXED,
-        )
+        pdf_docs = _pdf_bm25.search(query, top_k=TOP_K_MIXED)
+        col_docs = _college_bm25.search(query, top_k=TOP_K_MIXED)
+        for d in pdf_docs + col_docs:
+            context_parts.append(d["text"])
+            src_file = d.get("metadata", {}).get("source_file", "")
+            if src_file and src_file not in seen_sources:
+                sources.append(get_source_info(src_file))
+                seen_sources.add(src_file)
 
-        for results in [pdf_results, college_results]:
-            if results["documents"] and results["documents"][0]:
-                for i, doc in enumerate(results["documents"][0]):
-                    context_parts.append(doc)
-
-                    meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                    src_file = meta.get("source_file", "")
-                    if src_file and src_file not in seen_sources:
-                        sources.append(get_source_info(src_file))
-                        seen_sources.add(src_file)
-
-    # Combine all context
     context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant information found in the database."
-
-    import gc
-    gc.collect()
 
     return {
         "context": context,

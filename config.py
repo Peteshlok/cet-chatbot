@@ -13,6 +13,8 @@ STATIC_DIR = BASE_DIR / "static"
 CHROMA_PATH = DATA_DIR / "chroma_db"
 COLLEGES_JSON = DATA_DIR / "colleges.json"
 COLLEGE_NAMES_JSON = DATA_DIR / "college_names.json"
+PDF_CHUNKS_JSON = DATA_DIR / "pdf_chunks.json"
+COLLEGE_CHUNKS_JSON = DATA_DIR / "college_chunks.json"
 SOURCES_JSON = DATA_DIR / "sources.json"
 PROMPT_FILE = BASE_DIR / "prompt.txt"
 

@@ -66,41 +66,18 @@ def debug():
     try:
         import psutil
         p = psutil.Process(os.getpid())
-        steps["mem_start_mb"] = round(p.memory_info().rss / 1e6, 1)
+        steps["mem_mb"] = round(p.memory_info().rss / 1e6, 1)
     except Exception as e:
-        steps["mem_start_err"] = str(e)
-
-    steps["chroma_path_exists"] = CHROMA_PATH.exists()
-    steps["colleges_json_exists"] = COLLEGES_JSON.exists()
+        steps["mem_err"] = str(e)
 
     try:
-        from sentence_transformers import SentenceTransformer
-        steps["st_import"] = "ok"
-        _embedder = SentenceTransformer(EMBEDDING_MODEL)
-        steps["st_load"] = "ok"
-        try:
-            steps["mem_after_st_mb"] = round(p.memory_info().rss / 1e6, 1)
-        except Exception:
-            pass
+        from retriever import retrieve
+        res = retrieve("What documents are needed for verification?")
+        steps["bm25_test"] = "ok"
+        steps["context_chars"] = len(res.get("context", ""))
+        steps["sources_count"] = len(res.get("sources", []))
     except Exception as e:
-        steps["st_error"] = str(e)
-        return jsonify(steps), 200
-
-    try:
-        import chromadb
-        client = chromadb.PersistentClient(path=str(CHROMA_PATH))
-        pdf_c = client.get_collection(PDF_COLLECTION)
-        col_c = client.get_collection(COLLEGE_COLLECTION)
-        steps["chroma_load"] = "ok"
-        steps["pdf_count"] = pdf_c.count()
-        steps["col_count"] = col_c.count()
-        try:
-            steps["mem_after_chroma_mb"] = round(p.memory_info().rss / 1e6, 1)
-        except Exception:
-            pass
-    except Exception as e:
-        steps["chroma_error"] = str(e)
-        return jsonify(steps), 200
+        steps["bm25_err"] = str(e)
 
     return jsonify(steps), 200
 

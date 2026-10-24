@@ -13,6 +13,8 @@ import json
 import difflib
 
 import chromadb
+import torch
+torch.set_num_threads(1)
 from sentence_transformers import SentenceTransformer
 
 from config import (

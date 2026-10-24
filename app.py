@@ -40,6 +40,12 @@ def _get_college_names() -> list[str]:
 # Routes
 # ============================================================
 
+@app.route("/health", methods=["GET"])
+def health():
+    """Lightweight health check endpoint for uptime pingers & hosting platforms."""
+    return jsonify({"status": "healthy", "service": "cet-chatbot"}), 200
+
+
 @app.route("/")
 def index():
     """Serve the chat frontend."""
@@ -81,12 +87,28 @@ def chat():
 
     message = data["message"].strip()
     history = data.get("history", [])
+    user_context = data.get("context")
 
     if not message:
         return jsonify({"error": "Message cannot be empty."}), 400
 
+    # If context (percentile, category, branch) is provided by the frontend, augment the query
+    context_prefix = ""
+    if user_context and isinstance(user_context, dict):
+        ctx_parts = []
+        if user_context.get("score"):
+            ctx_parts.append(f"Student's MHT-CET Percentile/Score: {user_context['score']}")
+        if user_context.get("category"):
+            ctx_parts.append(f"Category: {user_context['category']}")
+        if user_context.get("branch"):
+            ctx_parts.append(f"Preferred Branch: {user_context['branch']}")
+        if ctx_parts:
+            context_prefix = f"[STUDENT CONTEXT: {', '.join(ctx_parts)}]\n"
+
+    final_query = f"{context_prefix}{message}" if context_prefix else message
+
     # Generate response through the full RAG pipeline
-    result = generate_response(query=message, history=history)
+    result = generate_response(query=final_query, history=history)
 
     return jsonify(result)
 
@@ -124,8 +146,9 @@ if __name__ == "__main__":
             sys.stdout.reconfigure(encoding="utf-8")
         except Exception:
             pass
+    port = int(os.environ.get("PORT", 5000))
     print("=" * 50)
     print("🤖 MHT-CET RAG Chatbot Server")
-    print("   Open http://localhost:5000 in your browser")
+    print(f"   Open http://localhost:{port} in your browser")
     print("=" * 50)
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host="0.0.0.0", port=port)

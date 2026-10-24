@@ -78,10 +78,18 @@ def generate_response(query: str, history: list[dict] = None) -> dict:
             history=trimmed_history,
         )
     except Exception as e:
-        response_text = (
-            f"I'm sorry, I encountered an error while generating a response. "
-            f"Please try again in a moment.\n\nError details: {str(e)}"
-        )
+        error_msg = str(e)
+        if "503" in error_msg or "UNAVAILABLE" in error_msg or "high demand" in error_msg:
+            response_text = (
+                "⚠️ **The AI Counsellor is temporarily experiencing high traffic.**\n\n"
+                "The server is currently busy. Please wait a few moments and ask your question again."
+            )
+        else:
+            response_text = (
+                "⚠️ **Unable to generate a response at this time.**\n\n"
+                "Please try asking your question again in a moment."
+            )
+        sources = []
 
     # Step 4: Generate follow-up suggestions based on intent
     suggestions = _get_suggestions(intent, query)

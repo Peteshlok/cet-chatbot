@@ -21,6 +21,7 @@ from config import (
     CHROMA_PATH,
     COLLEGE_COLLECTION,
     COLLEGES_JSON,
+    COLLEGE_NAMES_JSON,
     EMBEDDING_MODEL,
     PDF_COLLECTION,
     SOURCES_JSON,
@@ -40,10 +41,19 @@ _college_names = None
 _sources_data = None
 
 
+def _get_colleges_data() -> dict:
+    """Lazy-load the 4.5MB colleges.json only when exact cutoff data is requested."""
+    global _colleges_data
+    if _colleges_data is None:
+        with open(COLLEGES_JSON, "r", encoding="utf-8") as f:
+            _colleges_data = json.load(f)
+    return _colleges_data
+
+
 def _init():
     """Lazy-initialize the embedding model, ChromaDB, and college data."""
     global _embedder, _chroma_client, _pdf_collection, _college_collection
-    global _colleges_data, _college_names, _sources_data
+    global _college_names, _sources_data
 
     if _embedder is not None:
         return
@@ -53,16 +63,20 @@ def _init():
     _pdf_collection = _chroma_client.get_collection(PDF_COLLECTION)
     _college_collection = _chroma_client.get_collection(COLLEGE_COLLECTION)
 
-    with open(COLLEGES_JSON, "r", encoding="utf-8") as f:
-        _colleges_data = json.load(f)
-
-    _college_names = list(_colleges_data.keys())
+    if COLLEGE_NAMES_JSON.exists():
+        with open(COLLEGE_NAMES_JSON, "r", encoding="utf-8") as f:
+            _college_names = json.load(f)
+    else:
+        _college_names = list(_get_colleges_data().keys())
 
     try:
         with open(SOURCES_JSON, "r", encoding="utf-8") as f:
             _sources_data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         _sources_data = {}
+
+    import gc
+    gc.collect()
 
 
 # ============================================================
@@ -194,11 +208,12 @@ def get_exact_cutoffs(college_name: str, branch_name: str = None) -> dict | None
     Returns the raw data structure from colleges.json.
     """
     _init()
+    colleges_data = _get_colleges_data()
 
-    if college_name not in _colleges_data:
+    if college_name not in colleges_data:
         return None
 
-    college = _colleges_data[college_name]
+    college = colleges_data[college_name]
 
     if branch_name is None:
         return college
@@ -321,7 +336,7 @@ def retrieve(query: str) -> dict:
             for college_name in matching_colleges:
                 # Try to extract branch name from the query
                 branch_query = query.lower()
-                college_obj = _colleges_data.get(college_name, {})
+                college_obj = _get_colleges_data().get(college_name, {})
                 offerings = college_obj.get("offerings", {})
 
                 # Try to match a branch
@@ -384,6 +399,9 @@ def retrieve(query: str) -> dict:
 
     # Combine all context
     context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant information found in the database."
+
+    import gc
+    gc.collect()
 
     return {
         "context": context,

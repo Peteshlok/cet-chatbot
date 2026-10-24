@@ -9,6 +9,7 @@ Endpoints:
 """
 
 import os
+os.environ["MALLOC_ARENA_MAX"] = "2"
 os.environ["TRANSFORMERS_NO_TF"] = "1"
 os.environ["USE_TORCH"] = "1"
 
@@ -19,6 +20,7 @@ from flask_cors import CORS
 
 from config import (
     COLLEGES_JSON,
+    COLLEGE_NAMES_JSON,
     STATIC_DIR,
     CHROMA_PATH,
     EMBEDDING_MODEL,
@@ -37,9 +39,13 @@ _college_names = None
 def _get_college_names() -> list[str]:
     global _college_names
     if _college_names is None:
-        with open(COLLEGES_JSON, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        _college_names = sorted(data.keys())
+        if COLLEGE_NAMES_JSON.exists():
+            with open(COLLEGE_NAMES_JSON, "r", encoding="utf-8") as f:
+                _college_names = json.load(f)
+        else:
+            with open(COLLEGES_JSON, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            _college_names = sorted(data.keys())
     return _college_names
 
 

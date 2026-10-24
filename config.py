@@ -12,6 +12,7 @@ DATA_DIR = BASE_DIR / "data"
 STATIC_DIR = BASE_DIR / "static"
 CHROMA_PATH = DATA_DIR / "chroma_db"
 COLLEGES_JSON = DATA_DIR / "colleges.json"
+COLLEGE_NAMES_JSON = DATA_DIR / "college_names.json"
 SOURCES_JSON = DATA_DIR / "sources.json"
 PROMPT_FILE = BASE_DIR / "prompt.txt"
 

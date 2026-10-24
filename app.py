@@ -17,7 +17,14 @@ import json
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-from config import COLLEGES_JSON, STATIC_DIR
+from config import (
+    COLLEGES_JSON,
+    STATIC_DIR,
+    CHROMA_PATH,
+    EMBEDDING_MODEL,
+    PDF_COLLECTION,
+    COLLEGE_COLLECTION,
+)
 from generator import generate_response
 
 app = Flask(__name__, static_folder=str(STATIC_DIR))
@@ -44,6 +51,52 @@ def _get_college_names() -> list[str]:
 def health():
     """Lightweight health check endpoint for uptime pingers & hosting platforms."""
     return jsonify({"status": "healthy", "service": "cet-chatbot"}), 200
+
+
+@app.route("/api/debug", methods=["GET"])
+def debug():
+    """Diagnostic endpoint to inspect memory and subsystem loading."""
+    steps = {}
+    try:
+        import psutil
+        p = psutil.Process(os.getpid())
+        steps["mem_start_mb"] = round(p.memory_info().rss / 1e6, 1)
+    except Exception as e:
+        steps["mem_start_err"] = str(e)
+
+    steps["chroma_path_exists"] = CHROMA_PATH.exists()
+    steps["colleges_json_exists"] = COLLEGES_JSON.exists()
+
+    try:
+        from sentence_transformers import SentenceTransformer
+        steps["st_import"] = "ok"
+        _embedder = SentenceTransformer(EMBEDDING_MODEL)
+        steps["st_load"] = "ok"
+        try:
+            steps["mem_after_st_mb"] = round(p.memory_info().rss / 1e6, 1)
+        except Exception:
+            pass
+    except Exception as e:
+        steps["st_error"] = str(e)
+        return jsonify(steps), 200
+
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+        pdf_c = client.get_collection(PDF_COLLECTION)
+        col_c = client.get_collection(COLLEGE_COLLECTION)
+        steps["chroma_load"] = "ok"
+        steps["pdf_count"] = pdf_c.count()
+        steps["col_count"] = col_c.count()
+        try:
+            steps["mem_after_chroma_mb"] = round(p.memory_info().rss / 1e6, 1)
+        except Exception:
+            pass
+    except Exception as e:
+        steps["chroma_error"] = str(e)
+        return jsonify(steps), 200
+
+    return jsonify(steps), 200
 
 
 @app.route("/")
@@ -107,10 +160,19 @@ def chat():
 
     final_query = f"{context_prefix}{message}" if context_prefix else message
 
-    # Generate response through the full RAG pipeline
-    result = generate_response(query=final_query, history=history)
-
-    return jsonify(result)
+    try:
+        # Generate response through the full RAG pipeline
+        result = generate_response(query=final_query, history=history)
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "response": f"⚠️ An error occurred while processing your request: {str(e)}",
+            "sources": [],
+            "intent": "error",
+            "suggestions": []
+        }), 200
 
 
 @app.route("/api/colleges", methods=["GET"])

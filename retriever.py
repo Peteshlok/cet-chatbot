@@ -294,7 +294,8 @@ def retrieve(query: str) -> dict:
     seen_sources = set()
 
     # Embed the query
-    query_embedding = _embedder.encode(query).tolist()
+    with torch.inference_mode():
+        query_embedding = _embedder.encode(query, show_progress_bar=False).tolist()
 
     if intent == "cutoff" or intent == "college_info":
         # --- Search college_cutoffs collection ---

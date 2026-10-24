@@ -15,7 +15,7 @@ load_dotenv()
 # ⭐ CHANGE THESE TWO LINES TO SWITCH LLM PROVIDERS
 # ============================================================
 LLM_PROVIDER = "gemini"                # "gemini" | "openai" | "groq" | "ollama"
-LLM_MODEL = "gemini-3.5-flash"    # Model name for the chosen provider
+LLM_MODEL = "gemini-3.5-flash-lite"    # Model name for the chosen provider
 # ============================================================
 
 

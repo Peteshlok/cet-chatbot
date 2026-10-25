@@ -19,6 +19,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from config import (
+    DATA_DIR,
     COLLEGES_JSON,
     COLLEGE_NAMES_JSON,
     STATIC_DIR,
@@ -146,6 +147,8 @@ def chat():
     try:
         # Generate response through the full RAG pipeline
         result = generate_response(query=final_query, history=history)
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+        log_query(message, result.get("intent", "unknown"), client_ip)
         return jsonify(result)
     except Exception as e:
         import traceback
@@ -177,6 +180,129 @@ def suggest():
             "What is TFWS and how do I apply for it?",
         ]
     })
+
+
+# ============================================================
+# Analytics & Usage Tracking
+# ============================================================
+
+ANALYTICS_DB = DATA_DIR / "analytics.db"
+
+
+def _init_analytics_db():
+    import sqlite3
+    with sqlite3.connect(ANALYTICS_DB) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS queries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                query TEXT,
+                intent TEXT,
+                ip TEXT
+            )
+        """)
+        conn.commit()
+
+
+def log_query(query: str, intent: str, ip: str = ""):
+    """Log student questions anonymously to SQLite for usage tracking."""
+    try:
+        import sqlite3
+        _init_analytics_db()
+        with sqlite3.connect(ANALYTICS_DB) as conn:
+            conn.execute(
+                "INSERT INTO queries (query, intent, ip) VALUES (?, ?, ?)",
+                (query, intent, ip)
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"[Analytics] Error logging query: {e}")
+
+
+@app.route("/api/stats", methods=["GET"])
+def stats():
+    """Dashboard showing total queries asked and list of recent questions."""
+    import sqlite3
+    _init_analytics_db()
+
+    with sqlite3.connect(ANALYTICS_DB) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) as total FROM queries")
+        total = cur.fetchone()["total"]
+
+        cur.execute("SELECT COUNT(*) as today FROM queries WHERE date(timestamp) = date('now')")
+        today = cur.fetchone()["today"]
+
+        cur.execute("SELECT query, intent, timestamp, ip FROM queries ORDER BY id DESC LIMIT 100")
+        recent = [dict(r) for r in cur.fetchall()]
+
+    if request.args.get("format") == "json":
+        return jsonify({"total_queries": total, "today_queries": today, "recent_queries": recent})
+
+    import html
+    rows_html = "".join(
+        f"<tr><td>{r['timestamp']}</td><td><strong>{html.escape(r['query'])}</strong></td><td><span class='badge'>{html.escape(r['intent'])}</span></td></tr>"
+        for r in recent
+    )
+
+    dashboard = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RankMatch Chatbot Analytics</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * {{ box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b1120; color: #f8fafc; margin: 0; padding: 24px; }}
+        .container {{ max-width: 960px; margin: 0 auto; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }}
+        h1 {{ margin: 0; font-size: 22px; color: #38bdf8; display: flex; align-items: center; gap: 8px; }}
+        .refresh-btn {{ background: #1e293b; color: #94a3b8; border: 1px solid #334155; padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; text-decoration: none; }}
+        .refresh-btn:hover {{ background: #334155; color: #fff; }}
+        .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }}
+        .card {{ background: #131d33; padding: 20px; border-radius: 12px; border: 1px solid #1e293b; }}
+        .card-num {{ font-size: 34px; font-weight: 700; color: #38bdf8; }}
+        .card-label {{ font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }}
+        .table-wrap {{ background: #131d33; border-radius: 12px; border: 1px solid #1e293b; overflow-x: auto; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ padding: 12px 16px; text-align: left; font-size: 13px; border-bottom: 1px solid #1e293b; }}
+        th {{ background: #0f172a; color: #94a3b8; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }}
+        tr:last-child td {{ border-bottom: none; }}
+        tr:hover td {{ background: #1a2744; }}
+        .badge {{ background: #0284c7; color: #f0f9ff; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 RankMatch Chatbot Queries</h1>
+            <a href="/api/stats" class="refresh-btn">🔄 Refresh</a>
+        </div>
+        <div class="cards">
+            <div class="card">
+                <div class="card-num">{total}</div>
+                <div class="card-label">Total Questions Asked</div>
+            </div>
+            <div class="card">
+                <div class="card-num">{today}</div>
+                <div class="card-label">Questions Today</div>
+            </div>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th style="width: 170px;">Date & Time (UTC)</th><th>Student Question</th><th style="width: 120px;">Category</th></tr>
+                </thead>
+                <tbody>
+                    {rows_html if rows_html else '<tr><td colspan="3" style="text-align: center; color: #94a3b8; padding: 32px;">No questions asked yet.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>"""
+    return dashboard
 
 
 # ============================================================

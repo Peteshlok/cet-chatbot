@@ -57,8 +57,13 @@ DOMAIN_ACRONYMS_MAP = {
     "lc": "leaving certificate lc",
     "ssc": "secondary school certificate 10th ssc",
     "hsc": "higher secondary certificate 12th hsc",
-    "ils": "institute level seats ils",
+    "ils": "institute level seats institutional quota ils",
     "acap": "against cap vacancies acap",
+    "without cap": "institutional quota vacant seats after cap non cap",
+    "non cap": "institutional quota vacant seats after cap",
+    "management quota": "institutional quota seats unaided",
+    "institutional quota": "institutional level seats quota",
+    "nri quota": "nri supernumerary quota seats non resident indian",
     "nri": "non resident indian nri",
     "oci": "overseas citizen of india oci",
     "pio": "person of indian origin pio",
@@ -156,10 +161,10 @@ class SimpleBM25:
         }
 
     def search(self, query: str, top_k: int = 3) -> list[dict]:
-        # 1. Expand domain acronyms using word boundaries
+        # 1. Expand domain acronyms using word boundaries (longest first to match multi-word phrases)
         query_lower = query.lower()
-        for abbr, expansion in DOMAIN_ACRONYMS_MAP.items():
-            query_lower = re.sub(rf"\b{abbr}\b", expansion, query_lower)
+        for abbr in sorted(DOMAIN_ACRONYMS_MAP.keys(), key=len, reverse=True):
+            query_lower = re.sub(rf"\b{re.escape(abbr)}\b", DOMAIN_ACRONYMS_MAP[abbr], query_lower)
 
         # 2. Extract tokens: keep if >= 3 chars or in valid short terms, and exclude conversational stopwords
         raw_words = re.findall(r"\w+", query_lower)
@@ -241,21 +246,28 @@ def _init():
 # ============================================================
 
 CUTOFF_KEYWORDS = {
-    "cutoff", "cut off", "cut-off", "percentile", "rank", "seat",
-    "opening", "closing", "merit", "score", "marks", "gopens",
-    "gscs", "gsts", "gobcs", "tfws", "ews", "lopens", "cap round",
-    "round 1", "round 2", "round 3", "round 4", "r1", "r2", "r3", "r4",
-    "category", "reservation", "quota",
+    "cutoff", "cut off", "cut-off", "percentile", "closing rank",
+    "opening rank", "min rank", "what rank", "what score", "what marks",
+    "marks required", "percentile required", "score needed", "rank needed",
+    "cutoffs", "last year cutoff", "previous year cutoff",
+    "gopens", "gscs", "gsts", "gobcs", "lopens", "lscs", "lsts", "lobcs",
+    "gsebcs", "round 1 cutoff", "round 2 cutoff", "round 3 cutoff",
+    "r1 cutoff", "r2 cutoff", "r3 cutoff", "cap round cutoff",
 }
 
 PROCESS_KEYWORDS = {
     "process", "admission", "counselling", "counseling", "document",
     "verification", "scrutiny", "e-scrutiny", "escrutiny", "brochure",
     "eligibility", "registration", "fee", "schedule", "timeline",
-    "rule", "regulation", "procedure", "domicile", "certificate",
+    "rule", "rules", "regulation", "procedure", "domicile", "certificate",
     "normalization", "normalisation", "methodology", "syllabus",
     "exam", "pattern", "attempt", "objection", "press note",
     "centre", "center", "option form", "freeze", "float", "slide",
+    "how to", "how can", "can i get", "steps to", "without cap",
+    "non cap", "management quota", "institutional", "institute level",
+    "ils", "against cap", "acap", "vacancy round", "spot round",
+    "nri", "nri quota", "supernumerary", "quota", "reservation",
+    "quota rules", "seat matrix", "seats available",
 }
 
 COLLEGE_KEYWORDS = {
@@ -271,17 +283,34 @@ def classify_intent(query: str) -> str:
     """Classify user intent based on keyword matching."""
     query_lower = query.lower()
 
-    cutoff_score = sum(1 for kw in CUTOFF_KEYWORDS if kw in query_lower)
-    process_score = sum(1 for kw in PROCESS_KEYWORDS if kw in query_lower)
-    college_score = sum(1 for kw in COLLEGE_KEYWORDS if kw in query_lower)
+    # Check for procedural or "how-to" phrasing
+    is_how_to = any(p in query_lower for p in [
+        "how to", "how can", "can i get", "procedure", "process", "steps",
+        "without cap", "rules", "rule", "eligibility", "documents required"
+    ])
 
-    if cutoff_score >= 1 and (college_score >= 1 or cutoff_score >= 2):
-        return "cutoff"
-    if cutoff_score >= 2:
-        return "cutoff"
-    if process_score >= 1 and cutoff_score == 0:
+    # Check for explicit cutoff queries
+    has_cutoff = any(kw in query_lower for kw in CUTOFF_KEYWORDS) or (
+        ("cutoff" in query_lower or "cut off" in query_lower or "percentile" in query_lower) and
+        not is_how_to
+    )
+    has_process = any(kw in query_lower for kw in PROCESS_KEYWORDS)
+    has_college = any(kw in query_lower for kw in COLLEGE_KEYWORDS) or any(alias in query_lower for alias in COLLEGE_ALIASES)
+
+    # 1. Procedural questions take precedence over pure cutoff lookups
+    if is_how_to and not has_cutoff:
         return "process"
-    if college_score >= 1 and cutoff_score == 0 and process_score == 0:
+
+    # 2. Strict cutoff questions
+    if has_cutoff:
+        return "cutoff"
+
+    # 3. General process & admission rule questions
+    if has_process:
+        return "process"
+
+    # 4. College info / branch offerings
+    if has_college:
         return "college_info"
 
     return "mixed"
@@ -479,6 +508,21 @@ def retrieve(query: str) -> dict:
                         f"College: {college_name} offers the following branches: {branch_list}. "
                         f"Please specify which branch's cutoff you want."
                     )
+
+        # Quota & policy safety net: if user asked about quotas or rules, always include brochure chunks
+        QUOTA_POLICY_KEYWORDS = [
+            "quota", "nri", "ils", "institutional", "management",
+            "supernumerary", "without cap", "against cap", "reservation",
+            "tfws", "minority", "defence", "pwd", "rules", "rule", "procedure"
+        ]
+        if any(k in query.lower() for k in QUOTA_POLICY_KEYWORDS):
+            pdf_docs = _pdf_bm25.search(query, top_k=TOP_K_RESULTS)
+            for d in pdf_docs:
+                context_parts.append(d["text"])
+                src_file = d.get("metadata", {}).get("source_file", "")
+                if src_file and src_file not in seen_sources:
+                    sources.append(get_source_info(src_file))
+                    seen_sources.add(src_file)
 
     elif intent == "process":
         docs = _pdf_bm25.search(query, top_k=TOP_K_RESULTS)

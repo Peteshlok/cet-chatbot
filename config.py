@@ -32,9 +32,9 @@ CHUNK_SIZE_CHARS = CHUNK_SIZE * 4    # Approximate character count (1 token ≈ 
 CHUNK_OVERLAP_CHARS = CHUNK_OVERLAP * 4
 
 # ----- Retrieval Parameters -----
-TOP_K_RESULTS = 5         # Number of chunks to retrieve per query
+TOP_K_RESULTS = 10        # Number of chunks to retrieve per query (increased to prevent missing multi-page tables)
 TOP_K_CUTOFF = 3          # Number of chunks for cutoff-specific queries
-TOP_K_MIXED = 3           # Number of chunks per collection for mixed queries
+TOP_K_MIXED = 5           # Number of chunks per collection for mixed queries (5 PDF + 5 College = 10 total)
 
 # ----- Conversation -----
 MAX_HISTORY_TURNS = 4     # Number of past message pairs to keep in context

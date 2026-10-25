@@ -24,6 +24,117 @@ from config import (
     get_category_name,
 )
 
+# ============================================================
+# Indian Engineering & MHT-CET Domain Acronyms & Stopwords
+# ============================================================
+
+# Acronyms frequently used by Indian engineering students, mapped to their official brochure / database phrasing
+DOMAIN_ACRONYMS_MAP = {
+    # Admissions, Centres & Authorities
+    "fc": "facilitation centre fc",
+    "sc": "scrutiny centre sc",
+    "arc": "admission reporting centre arc",
+    "cap": "centralized admission process cap",
+    "ara": "admissions regulating authority ara",
+    "dte": "directorate of technical education dte",
+    "cet": "common entrance test mht cet",
+    "mht": "mht cet maharashtra",
+    "pcm": "physics chemistry mathematics pcm",
+    "pcb": "physics chemistry biology pcb",
+    "oms": "outside maharashtra state oms",
+    "ms": "maharashtra state ms",
+    "hu": "home university hu",
+    "ohu": "other than home university ohu",
+    "sl": "state level sl",
+    "ai": "all india artificial intelligence ai",
+    "tfws": "tuition fee waiver scheme tfws",
+    "ews": "economically weaker section ews",
+    "ebc": "economically backward class ebc",
+    "ncl": "non creamy layer ncl",
+    "cvc": "caste validity certificate cvc",
+    "tvic": "tribe validity certificate tvic",
+    "tc": "transfer certificate tc",
+    "lc": "leaving certificate lc",
+    "ssc": "secondary school certificate 10th ssc",
+    "hsc": "higher secondary certificate 12th hsc",
+    "ils": "institute level seats ils",
+    "acap": "against cap vacancies acap",
+    "nri": "non resident indian nri",
+    "oci": "overseas citizen of india oci",
+    "pio": "person of indian origin pio",
+    "ciwg": "children of indian workers in gulf ciwg",
+    "km": "kashmiri migrant km",
+    "pwd": "persons with disability pwd",
+    "def": "defence category def",
+
+    # CAP Rounds
+    "r1": "cap round 1 r1",
+    "r2": "cap round 2 r2",
+    "r3": "cap round 3 r3",
+    "r4": "cap round 4 r4",
+
+    # Engineering Branches / Disciplines
+    "cs": "computer science engineering cse cs",
+    "cse": "computer science engineering cse",
+    "it": "information technology it",
+    "ds": "data science ds",
+    "ml": "machine learning ml",
+    "aiml": "artificial intelligence machine learning aiml",
+    "aids": "artificial intelligence data science aids",
+    "ce": "civil engineering civil ce",
+    "me": "mechanical engineering mechanical me",
+    "ee": "electrical engineering electrical ee",
+    "ece": "electronics communication engineering ece",
+    "entc": "electronics telecommunication engineering entc",
+    "extc": "electronics telecommunication engineering extc",
+    "etc": "electronics telecommunication engineering etc",
+    "che": "chemical engineering chemical che",
+    "chem": "chemical engineering chemical",
+    "bt": "biotechnology bt",
+    "biotech": "biotechnology biotech",
+    "aero": "aerospace aeronautical aero",
+    "auto": "automobile automotive auto",
+    "prod": "production engineering prod",
+    "meta": "metallurgy materials engineering meta",
+    "inst": "instrumentation control engineering inst",
+    "ice": "instrumentation control engineering ice",
+    "iot": "internet of things iot",
+    "csbs": "computer science business systems csbs",
+    "cyber": "cyber security cyber",
+    "ro": "robotics automation robotics",
+
+    # Entrance Exams
+    "jee": "joint entrance examination jee main",
+    "neet": "national eligibility entrance neet",
+    "gate": "graduate aptitude test gate",
+    "nata": "national aptitude test architecture nata",
+    "cuet": "common university entrance test cuet",
+    "bitsat": "bitsat",
+    "viteee": "viteee",
+}
+
+# 2-letter words that are legitimate domain acronyms and must NEVER be dropped
+VALID_SHORT_TERMS = {
+    # 2-letter Engineering Branches
+    "cs", "it", "ai", "ds", "ml", "ce", "me", "ee", "bt", "ro",
+    # 2-letter Admissions / Centres / Quotas / Certificates / Categories
+    "fc", "sc", "ms", "hu", "sl", "tc", "lc", "jk", "km", "st", "vj", "dt", "nt", "mu", "su",
+    # 2-letter Rounds & Standard School Classes
+    "r1", "r2", "r3", "r4", "10", "12",
+}
+
+# Conversational filler words that skew BM25 relevance if left in
+CONVERSATIONAL_STOPWORDS = {
+    "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
+    "is", "are", "was", "were", "be", "been", "being",
+    "an", "a", "the", "and", "or", "in", "on", "at", "to", "for",
+    "of", "with", "by", "over", "there", "here", "that", "this",
+    "these", "those", "from", "as", "into", "about", "tell", "give",
+    "please", "can", "could", "would", "should", "does", "do", "did",
+    "me", "my", "i", "you", "your", "we", "our", "them", "their",
+    "any", "some", "need", "needed", "want", "know", "much", "many",
+}
+
 # ---- BM25 Search Engine ----
 class SimpleBM25:
     """Fast, pure-Python Okapi BM25 search engine with zero external dependencies."""
@@ -45,14 +156,30 @@ class SimpleBM25:
         }
 
     def search(self, query: str, top_k: int = 3) -> list[dict]:
-        q_tokens = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
+        # 1. Expand domain acronyms using word boundaries
+        query_lower = query.lower()
+        for abbr, expansion in DOMAIN_ACRONYMS_MAP.items():
+            query_lower = re.sub(rf"\b{abbr}\b", expansion, query_lower)
+
+        # 2. Extract tokens: keep if >= 3 chars or in valid short terms, and exclude conversational stopwords
+        raw_words = re.findall(r"\w+", query_lower)
+        q_tokens = [
+            w for w in raw_words
+            if (len(w) >= 3 or w in VALID_SHORT_TERMS) and w not in CONVERSATIONAL_STOPWORDS
+        ]
+
+        # Fallback if all tokens filtered
         if not q_tokens:
-            return []
+            q_tokens = [w for w in raw_words if len(w) >= 2 and w not in CONVERSATIONAL_STOPWORDS]
+            if not q_tokens:
+                q_tokens = [w for w in raw_words if len(w) >= 2]
+
         scores = []
         for i, d in enumerate(self.corpus):
             words = Counter(re.findall(r"\w+", d["text"].lower()))
             score = 0.0
-            for q in q_tokens:
+            # Use set(q_tokens) so expanded synonym terms don't artificially duplicate tf score
+            for q in set(q_tokens):
                 if q in words:
                     tf = words[q]
                     idf = self.idf.get(q, 0.0)
@@ -165,16 +292,24 @@ def classify_intent(query: str) -> str:
 # ============================================================
 
 COLLEGE_ALIASES = {
-    "coep": "College of Engineering, Pune",
-    "vjti": "Veermata Jijabai Technological Institute",
-    "pict": "Pune Institute of Computer Technology",
-    "cummins": "Cummins College of Engineering",
-    "walchand": "Walchand College of Engineering",
-    "mit": "Maharashtra Institute of Technology",
-    "spit": "Sardar Patel Institute of Technology",
-    "djsce": "Dwarkadas J. Sanghvi College of Engineering",
-    "kjsce": "K. J. Somaiya College of Engineering",
-    "tsec": "Thadomal Shahani Engineering College",
+    "coep": "coep technological university",
+    "vjti": "veermata jijabai",
+    "pict": "pune institute of computer technology",
+    "cummins": "cummins",
+    "walchand": "walchand college of engineering",
+    "wce": "walchand college of engineering",
+    "mit": "maharashtra institute of technology",
+    "spit": "sardar patel institute",
+    "spce": "sardar patel college of engineering",
+    "djsce": "dwarkadas j. sanghvi",
+    "sanghvi": "dwarkadas j. sanghvi",
+    "kjsce": "somaiya",
+    "tsec": "thadomal shahani",
+    "vit": "vishwakarma institute of technology",
+    "viit": "vishwakarma institute of information technology",
+    "pccoe": "pimpri chinchwad college of engineering",
+    "pccoep": "pimpri chinchwad college of engineering",
+    "vesit": "vivekanand education society",
 }
 
 

@@ -187,6 +187,7 @@ def suggest():
 # ============================================================
 
 ANALYTICS_DB = DATA_DIR / "analytics.db"
+STATS_SECRET_KEY = os.getenv("STATS_SECRET_KEY", "rm_secret_2026")
 
 
 def _init_analytics_db():
@@ -221,7 +222,45 @@ def log_query(query: str, intent: str, ip: str = ""):
 
 @app.route("/api/stats", methods=["GET"])
 def stats():
-    """Dashboard showing total queries asked and list of recent questions."""
+    """Dashboard showing total queries asked and list of recent questions (password protected)."""
+    provided_key = request.args.get("key") or request.headers.get("X-Stats-Key")
+    if provided_key != STATS_SECRET_KEY:
+        if request.args.get("format") == "json":
+            return jsonify({"error": "Unauthorized: Invalid or missing access key."}), 401
+
+        error_banner = "<p style='color: #ef4444; font-size: 13px; margin-bottom: 12px;'>⚠️ Incorrect password. Please try again.</p>" if provided_key else ""
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>401 Unauthorized</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b1120; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+        .card {{ background: #131d33; padding: 36px 32px; border-radius: 16px; border: 1px solid #1e293b; max-width: 380px; width: 90%; text-align: center; }}
+        h1 {{ font-size: 38px; margin: 0 0 10px; }}
+        h2 {{ font-size: 20px; margin: 0 0 8px; color: #38bdf8; }}
+        p {{ color: #94a3b8; font-size: 13px; margin: 0 0 20px; }}
+        input {{ width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 8px; border: 1px solid #334155; background: #0b1120; color: #fff; margin-bottom: 12px; font-size: 14px; outline: none; }}
+        input:focus {{ border-color: #38bdf8; }}
+        button {{ width: 100%; padding: 12px; border-radius: 8px; border: none; background: #0284c7; color: #fff; font-weight: 600; cursor: pointer; font-size: 14px; }}
+        button:hover {{ background: #0369a1; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔒</h1>
+        <h2>Admin Access Required</h2>
+        <p>Please enter your access key to view chatbot analytics.</p>
+        {error_banner}
+        <form method="GET" action="/api/stats">
+            <input type="password" name="key" placeholder="Enter admin password..." required autofocus />
+            <button type="submit">Unlock Dashboard</button>
+        </form>
+    </div>
+</body>
+</html>""", 401
+
     import sqlite3
     _init_analytics_db()
 
@@ -277,7 +316,7 @@ def stats():
     <div class="container">
         <div class="header">
             <h1>🤖 RankMatch Chatbot Queries</h1>
-            <a href="/api/stats" class="refresh-btn">🔄 Refresh</a>
+            <a href="/api/stats?key={html.escape(provided_key)}" class="refresh-btn">🔄 Refresh</a>
         </div>
         <div class="cards">
             <div class="card">
